@@ -1,28 +1,67 @@
 const nodemailer = require('nodemailer');
+const { ImapFlow } = require('imapflow');
 
-// শুধুমাত্র ইমেইল সেন্ড করার কনফিগারেশন (SMTP)
+// ১. মেইল পাঠানোর কনফিগারেশন (Gmail SMTP)
 const transporter = nodemailer.createTransport({
-    host: 'smtp.office365.com', 
-    port: 587, 
-    secure: false,
-    auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
-    tls: { ciphers: 'SSLv3', rejectUnauthorized: false }
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+    }
 });
 
-// রিপ্লাই পাঠানোর ফাংশন
+// ২. মেইল রিড করার কনফিগারেশন (Gmail IMAP)
+const client = new ImapFlow({
+    host: 'imap.gmail.com',
+    port: 993,
+    secure: true,
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+    },
+    logger: false
+});
+
 async function sendReplyEmail(toAddress, subject, bodyContent) {
     try {
         await transporter.sendMail({
-            from: `"Support Team" <${process.env.EMAIL_USER}>`,
-            to: toAddress, 
-            subject: subject, 
+            from: `"Support Bot" <${process.env.EMAIL_USER}>`,
+            to: toAddress,
+            subject: subject,
             text: bodyContent
         });
-        console.log(`✅ Reply Email sent to ${toAddress}`);
+        console.log(`✅ Reply sent to ${toAddress}`);
     } catch (error) {
-        console.error(`❌ Error sending email:`, error.message);
+        console.error(`❌ Send Error:`, error.message);
     }
 }
 
-// শুধুমাত্র sendReplyEmail এক্সপোর্ট করা হলো
-module.exports = { sendReplyEmail };
+async function fetchUnreadEmails() {
+    try {
+        await client.connect();
+        let lock = await client.getMailboxLock('INBOX');
+        const messages = await client.search({ seen: false });
+        
+        let emails = [];
+        for (let msg of messages) {
+            let emailData = await client.fetchOne(msg.uid, { envelope: true, source: true });
+            emails.push({
+                uid: msg.uid,
+                subject: emailData.envelope.subject,
+                sender: emailData.envelope.from[0].address,
+                body: emailData.source.toString()
+            });
+            await client.messageFlagsAdd(msg.uid, ['\\Seen']); // মেইলটি Read মার্ক করা
+        }
+        lock.release();
+        await client.logout();
+        return emails;
+    } catch (error) {
+        console.error("❌ IMAP Connection Error:", error.message);
+        return [];
+    }
+}
+
+module.exports = { fetchUnreadEmails, sendReplyEmail };

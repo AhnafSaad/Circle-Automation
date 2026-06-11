@@ -1,51 +1,59 @@
 require('dotenv').config();
-const express = require('express');
-
+const { fetchUnreadEmails, sendReplyEmail } = require('./src/email/outlook');
 const { extractDataFromEmail } = require('./src/utils/extractId');
 const { verifyClientFromAPI } = require('./src/api/checkUser');
-// টেস্টিং শেষে এগুলো আনকমেন্ট করতে হবে
-// const { summarizeIssueWithAI } = require('./src/ai/gemini');
-// const { generateTokenViaScraping } = require('./src/scraper/generateToken');
-// const { sendReplyEmail } = require('./src/email/outlook');
+const { summarizeIssueWithAI } = require('./src/ai/gemini');
+const { generateTokenViaScraping } = require('./src/scraper/generateToken');
 
-const app = express();
-app.use(express.json());
-
-app.post('/webhook/email', async (req, res) => {
-    const { sender, subject, body } = req.body;
-    console.log(`\n📬 Webhook Received! Email from: ${sender}`);
+async function startBot() {
+    console.log("🤖 Support Bot started... Checking for new emails every 30 seconds.\n");
     
-    // Power Automate-কে সাথে সাথে রেসপন্স দেওয়া
-    res.status(200).send("Webhook received");
+    setInterval(async () => {
+        const emails = await fetchUnreadEmails();
+        
+        for (let email of emails) {
+            console.log(`\n📩 New Email Received! From: ${email.sender}`);
+            
+            const emailData = {
+                subject: email.subject || "",
+                bodyPreview: email.body || "",
+                body: { content: email.body || "" },
+                sender: { emailAddress: { address: email.sender || "" } }
+            };
 
-    // extractId.js এর জন্য ডাটা সাজানো
-    const emailData = {
-        subject: subject || "",
-        bodyPreview: body || "",
-        body: { content: body || "" },
-        sender: { emailAddress: { address: sender || "" } }
-    };
+            const data = extractDataFromEmail(emailData);
+            if (data.skip) {
+                console.log("⏭️ Skipped: No valid ID found in the email.");
+                continue;
+            }
 
-    const data = extractDataFromEmail(emailData);
-    if (data.skip) {
-        console.log("⏭️ Skipped: No valid ID found.");
-        return;
-    }
+            console.log(`✅ Extracted ID: ${data.u}`);
+            console.log("🔍 Checking API...");
+            const { isVerified, clientType } = await verifyClientFromAPI(data.u);
 
-    console.log(`✅ Extracted ID: ${data.u}`);
+            if (isVerified) {
+                console.log(`🎉 Success: User verified as ${clientType}!`);
+                
+                // AI Summary
+                const issueSummary = await summarizeIssueWithAI(data.b);
+                console.log(`📝 AI Summary generated: ${issueSummary}`);
+                
+                // Puppeteer Scraping
+                console.log("⚙️ Generating Token via Scraping...");
+                const token = await generateTokenViaScraping(data.u, clientType, issueSummary);
+                
+                // Reply Email
+                if (token !== "Failed") {
+                    const replyBody = `আপনার রেফারেন্স টোকেন: ${token}\nসমস্যার সারসংক্ষেপ: ${issueSummary}\n\nধন্যবাদ!`;
+                    await sendReplyEmail(data.s, `Re: ${data.r}`, replyBody);
+                } else {
+                    console.log("❌ Failed to generate token.");
+                }
+            } else {
+                console.log("❌ User not found in API.");
+            }
+        }
+    }, 30000); 
+}
 
-    console.log("🔍 Checking API...");
-    const { isVerified, clientType } = await verifyClientFromAPI(data.u);
-
-    if (isVerified) {
-        console.log(`🎉 Success: User verified as ${clientType}!`);
-        // আপাতত শুধু API টেস্ট করা হচ্ছে। সবকিছু ঠিক থাকলে এখানে Gemini এবং Puppeteer এর কোডগুলো যুক্ত হবে।
-    } else {
-        console.log("❌ Failed: User not found in API.");
-    }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 Express Server is running on port ${PORT}`);
-});
+startBot();

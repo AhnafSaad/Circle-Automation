@@ -38,3 +38,4 @@ async function generateTokenViaScraping(userId, clientType, issueSummary) {
 }
 
 module.exports = { generateTokenViaScraping };
+
