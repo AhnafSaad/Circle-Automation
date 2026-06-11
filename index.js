@@ -1,42 +1,51 @@
 require('dotenv').config();
-const cron = require('node-cron');
+const express = require('express');
 
 const { extractDataFromEmail } = require('./src/utils/extractId');
 const { verifyClientFromAPI } = require('./src/api/checkUser');
-const { summarizeIssueWithAI } = require('./src/ai/gemini');
-const { generateTokenViaScraping } = require('./src/scraper/generateToken');
-const { fetchUnreadEmails, sendReplyEmail } = require('./src/email/outlook');
+// টেস্টিং শেষে এগুলো আনকমেন্ট করতে হবে
+// const { summarizeIssueWithAI } = require('./src/ai/gemini');
+// const { generateTokenViaScraping } = require('./src/scraper/generateToken');
+// const { sendReplyEmail } = require('./src/email/outlook');
 
-async function processIncomingEmails() {
-    const emails = await fetchUnreadEmails();
+const app = express();
+app.use(express.json());
+
+app.post('/webhook/email', async (req, res) => {
+    const { sender, subject, body } = req.body;
+    console.log(`\n📬 Webhook Received! Email from: ${sender}`);
     
-    for (const email of emails) {
-        const data = extractDataFromEmail(email);
-        if (data.skip) continue;
+    // Power Automate-কে সাথে সাথে রেসপন্স দেওয়া
+    res.status(200).send("Webhook received");
 
-        const { isVerified, clientType } = await verifyClientFromAPI(data.u);
-        if (!isVerified) continue;
+    // extractId.js এর জন্য ডাটা সাজানো
+    const emailData = {
+        subject: subject || "",
+        bodyPreview: body || "",
+        body: { content: body || "" },
+        sender: { emailAddress: { address: sender || "" } }
+    };
 
-        const issueSummary = await summarizeIssueWithAI(data.b);
-
-        const token = await generateTokenViaScraping(data.u, clientType, issueSummary);
-
-        if (token !== "Failed") {
-            const replySubject = `Re: ${data.r}`;
-            let replyBody = "";
-
-            if (clientType === 'Ticket') {
-                replyBody = `প্রিয় এন্টারপ্রাইজ ক্লায়েন্ট, আপনার সাপোর্ট টিকেটটি তৈরি করা হয়েছে।\n\nটিকেট আইডি: ${token}\nআপনার সমস্যার সারসংক্ষেপ: ${issueSummary}\n\nধন্যবাদ,\nএন্টারপ্রাইজ সাপোর্ট`;
-            } else if (clientType === 'Radius') {
-                replyBody = `আপনার রিকুয়েস্টটি সফলভাবে গ্রহণ করা হয়েছে।\n\nআপনার রেফারেন্স টোকেন: ${token}\nআপনার সমস্যার সারসংক্ষেপ: ${issueSummary}\n\nধন্যবাদ,\nসাপোর্ট টিম`;
-            }
-
-            await sendReplyEmail(data.s, replySubject, replyBody);
-        } else {
-            console.log(`Token generation failed for ${data.u}, no email sent.`);
-        }
+    const data = extractDataFromEmail(emailData);
+    if (data.skip) {
+        console.log("⏭️ Skipped: No valid ID found.");
+        return;
     }
-}
 
-cron.schedule('* * * * *', processIncomingEmails);
-console.log("🚀 Email processing service started. Polling every minute...");
+    console.log(`✅ Extracted ID: ${data.u}`);
+
+    console.log("🔍 Checking API...");
+    const { isVerified, clientType } = await verifyClientFromAPI(data.u);
+
+    if (isVerified) {
+        console.log(`🎉 Success: User verified as ${clientType}!`);
+        // আপাতত শুধু API টেস্ট করা হচ্ছে। সবকিছু ঠিক থাকলে এখানে Gemini এবং Puppeteer এর কোডগুলো যুক্ত হবে।
+    } else {
+        console.log("❌ Failed: User not found in API.");
+    }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`🚀 Express Server is running on port ${PORT}`);
+});
