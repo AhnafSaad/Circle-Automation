@@ -45,23 +45,22 @@ async function startEmailListener(onNewEmail) {
         let lock = await client.getMailboxLock('INBOX');
         console.log("⚡ Hybrid Gmail Server Connected! (Push + 10s Polling active)...");
 
+        // 🛑 স্প্যাম ফিল্টার অনেক স্ট্রং করা হলো
         const ignoreKeywords = [
-            'linkedin.com', 'instagram.com', 'facebookmail.com', 'facebook.com', 
-            'twitter.com', 'x.com', 'youtube.com', 'pinterest.com', 
-            'promotions', 'marketing', 'newsletter', 'no-reply', 'noreply', 'alerts'
+            'linkedin', 'instagram', 'facebook', 'twitter', 'x.com', 'youtube', 'pinterest', 
+            'postman', 'realmadrid', 'github', 'gitlab', 'vercel', 'heroku', 'render', 'mongodb', 
+            'dazn', 'binance', 'promotions', 'marketing', 'newsletter', 'no-reply', 'noreply', 
+            'alerts', 'support@', 'info@', 'team@'
         ];
 
-        // মেইল চেক করার কোর ফাংশন (এখন অনেক ফাস্ট)
         const checkMails = async () => {
             if (isProcessing) return;
             isProcessing = true;
 
             try {
-                // 🚀 ম্যাজিক: ডেট ফিল্টার বাদ দেওয়া হয়েছে! এখন সরাসরি শুধু আনরিড মেইল খুঁজবে
                 let uids = await client.search({ seen: false });
                 
                 if (uids.length > 0) {
-                    // একসাথে অনেক মেইল আসলে যেন হ্যাং না করে, তাই শেষের ৫টি করে প্রসেস করবে
                     uids = uids.slice(-5);
                     
                     for (let uid of uids) {
@@ -71,9 +70,11 @@ async function startEmailListener(onNewEmail) {
                             let parsed = await simpleParser(emailData.source);
                             let senderAddress = parsed.from && parsed.from.value[0] ? parsed.from.value[0].address.toLowerCase() : "";
                             
+                            // সেন্ডার মেইলে ওপরের কোনো কিওয়ার্ড থাকলে স্কিপ করবে
                             let isIgnored = ignoreKeywords.some(keyword => senderAddress.includes(keyword));
                             
                             if (isIgnored) {
+                                console.log(`🚫 Ignored spam/promo email from: ${senderAddress}`);
                                 await client.messageFlagsAdd(uid, ['\\Seen']); 
                                 continue; 
                             }
@@ -85,8 +86,8 @@ async function startEmailListener(onNewEmail) {
                                 body: parsed.text || "" 
                             };
                             
-                            await client.messageFlagsAdd(uid, ['\\Seen']); // মেইল Read করে দেয়া হলো
-                            await onNewEmail(emailObj); // এক্সট্রাক্ট করার জন্য index.js এ পাঠানো হলো
+                            await client.messageFlagsAdd(uid, ['\\Seen']); 
+                            await onNewEmail(emailObj); 
                         }
                     }
                 }
@@ -97,22 +98,18 @@ async function startEmailListener(onNewEmail) {
             isProcessing = false;
         };
 
-        // ১. রান করার সাথে সাথেই একবার চেক করবে
         await checkMails();
 
-        // ২. ফলব্যাক হিসেবে প্রতি ১০ সেকেন্ড পর পর চেক করবে (যাতে কোনোভাবেই লেট না হয়)
         setInterval(() => {
             checkMails();
         }, 10000);
 
-        // ৩. গুগল পুশ নোটিফিকেশন দিলে সাথে সাথেই চেক করবে (০ সেকেন্ড ডিলে)
         client.on('exists', () => {
             checkMails();
         });
 
     } catch (error) {
         console.error("❌ IMAP Connection Error:", error.message);
-        // কানেকশন লস্ট হলে ১০ সেকেন্ড পর আবার রিস্টার্ট নিবে
         setTimeout(() => startEmailListener(onNewEmail), 10000);
     }
 }
