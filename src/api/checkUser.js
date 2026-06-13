@@ -1,16 +1,19 @@
 const axios = require('axios');
 
 async function verifyClientFromAPI(extractedId) {
-    const requestBody = { search_by: extractedId };
-
     // ১. Radius API চেক
     try {
         const radiusUrl = process.env.RADIUS_CHECK_API_URL;
         if (radiusUrl && radiusUrl.trim() !== '') {
+            
+            // 💡 Header এর বদলে Body-তে সিক্রেট কি পাঠানো হচ্ছে
+            const requestBody = { 
+                search_by: extractedId,
+                CLIENT_SEARCH_SECRET: process.env.RADIUS_CHECK_SECRET 
+            };
+
             const res = await axios.post(radiusUrl, requestBody, {
                 headers: { 
-                    // 💡 ম্যাজিক এখানেই! CLIENT_SEARCH_SECRET এর বদলে Authorization: Bearer দেওয়া হয়েছে
-                    'Authorization': `Bearer ${process.env.RADIUS_CHECK_SECRET}`, 
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
                 }
@@ -27,15 +30,18 @@ async function verifyClientFromAPI(extractedId) {
         console.log(`❌ Radius API Error (Status ${status}): ${msg}`);
     }
 
-    // ২. Ticket API চেক (লিংক না থাকলে স্কিপ করবে)
+    // ২. Ticket API চেক
     try {
         const ticketUrl = process.env.TICKET_CHECK_API_URL;
         
         if (ticketUrl && ticketUrl.trim() !== '') {
-            const res = await axios.post(ticketUrl, requestBody, {
+            const ticketBody = { 
+                search_by: extractedId,
+                CLIENT_SEARCH_SECRET: process.env.TICKET_CHECK_SECRET 
+            };
+
+            const res = await axios.post(ticketUrl, ticketBody, {
                 headers: { 
-                    // টিকিটের জন্যও একই হেডার ফরম্যাট দেওয়া হলো
-                    'Authorization': `Bearer ${process.env.TICKET_CHECK_SECRET}`, 
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
                 }
@@ -46,7 +52,7 @@ async function verifyClientFromAPI(extractedId) {
                 return { isVerified: true, clientType: 'Ticket', exactUsername: actualUsername };
             }
         } else {
-            console.log(`⏭️ Skipped Ticket API (No URL provided in .env)`);
+            console.log(`⏭️ Skipped Ticket API (No URL provided)`);
         }
     } catch (e) {
         console.log(`❌ Ticket API Error: ${e.message}`);

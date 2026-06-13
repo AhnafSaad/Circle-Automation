@@ -12,18 +12,10 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-const client = new ImapFlow({
-    host: 'imap.gmail.com',
-    port: 993,
-    secure: true,
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-    },
-    logger: false
-});
-
-let isProcessing = false;
+let emailQueue = [];
+let isProcessingQueue = false;
+let isFetching = false;
+let fallbackInterval = null;
 
 async function sendReplyEmail(toAddress, subject, bodyContent) {
     try {
@@ -40,76 +32,128 @@ async function sendReplyEmail(toAddress, subject, bodyContent) {
 }
 
 async function startEmailListener(onNewEmail) {
-    try {
-        await client.connect();
-        let lock = await client.getMailboxLock('INBOX');
-        console.log("⚡ Hybrid Gmail Server Connected! (Push + 10s Polling active)...");
+    const client = new ImapFlow({
+        host: 'imap.gmail.com',
+        port: 993,
+        secure: true,
+        auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS
+        },
+        logger: false 
+    });
 
-        // 🛑 স্প্যাম ফিল্টার অনেক স্ট্রং করা হলো
-        const ignoreKeywords = [
-            'linkedin', 'instagram', 'facebook', 'twitter', 'x.com', 'youtube', 'pinterest', 
-            'postman', 'realmadrid', 'github', 'gitlab', 'vercel', 'heroku', 'render', 'mongodb', 
-            'dazn', 'binance', 'promotions', 'marketing', 'newsletter', 'no-reply', 'noreply', 
-            'alerts', 'support@', 'info@', 'team@'
-        ];
+    const processQueue = async () => {
+        if (isProcessingQueue) return;
+        isProcessingQueue = true;
 
-        const checkMails = async () => {
-            if (isProcessing) return;
-            isProcessing = true;
-
+        while (emailQueue.length > 0) {
+            let emailObj = emailQueue.shift(); 
             try {
-                let uids = await client.search({ seen: false });
-                
-                if (uids.length > 0) {
-                    uids = uids.slice(-5);
-                    
-                    for (let uid of uids) {
-                        let emailData = await client.fetchOne(uid, { source: true }); 
-                        
-                        if (emailData && emailData.source) {
-                            let parsed = await simpleParser(emailData.source);
-                            let senderAddress = parsed.from && parsed.from.value[0] ? parsed.from.value[0].address.toLowerCase() : "";
-                            
-                            // সেন্ডার মেইলে ওপরের কোনো কিওয়ার্ড থাকলে স্কিপ করবে
-                            let isIgnored = ignoreKeywords.some(keyword => senderAddress.includes(keyword));
-                            
-                            if (isIgnored) {
-                                console.log(`🚫 Ignored spam/promo email from: ${senderAddress}`);
-                                await client.messageFlagsAdd(uid, ['\\Seen']); 
-                                continue; 
-                            }
+                await onNewEmail(emailObj); 
+            } catch (error) {
+                console.error("❌ Process Error:", error.message);
+            }
+        }
+        
+        isProcessingQueue = false;
+    };
 
-                            const emailObj = {
+    const ignoreKeywords = [
+        'linkedin', 'instagram', 'facebook', 'twitter', 'x.com', 'youtube', 'pinterest', 
+        'postman', 'realmadrid', 'github', 'gitlab', 'vercel', 'heroku', 'render', 'mongodb', 
+        'dazn', 'binance', 'shopify', 'coursera', 'n8n', 'promotions', 'marketing', 
+        'newsletter', 'no-reply', 'noreply', 'alerts', 'support@', 'info@', 'team@'
+    ];
+
+    const checkMails = async () => {
+        if (isFetching) return;
+        isFetching = true;
+        let tempLock;
+
+        try {
+            tempLock = await client.getMailboxLock('INBOX');
+            
+            let yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            
+            let uids = await client.search({ seen: false, since: yesterday });
+            
+            if (uids && uids.length > 0) {
+                uids = uids.slice(-5); 
+                
+                for (let uid of uids) {
+                    let emailData = await client.fetchOne(uid, { source: true }); 
+                    
+                    if (emailData && emailData.source) {
+                        let parsed = await simpleParser(emailData.source);
+                        let senderAddress = parsed.from && parsed.from.value[0] ? parsed.from.value[0].address.toLowerCase() : "";
+                        
+                        let isIgnored = ignoreKeywords.some(keyword => senderAddress.includes(keyword));
+                        
+                        await client.messageFlagsAdd(uid, ['\\Seen']); 
+                        
+                        if (!isIgnored) {
+                            emailQueue.push({
                                 uid: uid,
                                 subject: parsed.subject || "(No Subject)", 
                                 sender: senderAddress || "Unknown Sender",
                                 body: parsed.text || "" 
-                            };
-                            
-                            await client.messageFlagsAdd(uid, ['\\Seen']); 
-                            await onNewEmail(emailObj); 
+                            });
                         }
                     }
                 }
-            } catch (err) {
-                console.error("❌ Search Error:", err.message);
             }
+        } catch (err) {
+            console.error("❌ IMAP Search Error:", err.message);
+        } finally {
+            if (tempLock) {
+                tempLock.release();
+            }
+            isFetching = false;
+            processQueue(); 
+        }
+    };
+
+    try {
+        await client.connect();
+        console.log("⚡ Gmail Server Connected!");
+
+        let initLock = await client.getMailboxLock('INBOX');
+        initLock.release(); 
+        console.log("🔓 INBOX active and securely listening for Real-time push emails...");
+
+        client.on('close', () => {
+            console.log("⚠️ Gmail Connection Dropped! Auto-reconnecting in 5 seconds...");
+            if (fallbackInterval) clearInterval(fallbackInterval);
             
-            isProcessing = false;
-        };
+            // 💡 এই দুটো লাইন না থাকার কারণেই বট চুপ মেরে যাচ্ছিল!
+            isFetching = false; 
+            isProcessingQueue = false; 
+            
+            setTimeout(() => startEmailListener(onNewEmail), 5000);
+        });
 
-        await checkMails();
-
-        setInterval(() => {
-            checkMails();
-        }, 10000);
+        client.on('error', (err) => {
+            console.error("❌ IMAP Client Error:", err.message);
+        });
 
         client.on('exists', () => {
+            console.log("🔔 Push Notification: New email landed!");
             checkMails();
         });
 
+        await checkMails();
+
+        fallbackInterval = setInterval(() => {
+            checkMails();
+        }, 10000);
+
     } catch (error) {
         console.error("❌ IMAP Connection Error:", error.message);
+        if (fallbackInterval) clearInterval(fallbackInterval);
+        isFetching = false;
+        isProcessingQueue = false;
         setTimeout(() => startEmailListener(onNewEmail), 10000);
     }
 }

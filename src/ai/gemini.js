@@ -3,7 +3,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 async function summarizeIssueWithAI(emailBody) {
     try {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); 
+        const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash"}); 
         
         const prompt = `You are a professional customer support assistant. Summarize the customer issue in a clear, professional manner. Keep it concise (2-3 sentences) and focus on the key problem reported. If no technical issue is specified, state 'not yet specified'.\n\nCustomer Email:\n${emailBody}`;
         
@@ -15,4 +15,5 @@ async function summarizeIssueWithAI(emailBody) {
     }
 }
 module.exports = { summarizeIssueWithAI };
+
 
