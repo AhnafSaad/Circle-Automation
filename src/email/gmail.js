@@ -15,7 +15,6 @@ const transporter = nodemailer.createTransport({
 let emailQueue = [];
 let isProcessingQueue = false;
 let isFetching = false;
-let fallbackInterval = null;
 
 async function sendReplyEmail(toAddress, subject, bodyContent) {
     try {
@@ -67,23 +66,27 @@ async function startEmailListener(onNewEmail) {
     ];
 
     const checkMails = async () => {
-        if (isFetching) return;
+        // যদি মেইলবক্স এখনো ওপেন না হয়, তাহলে চেক করবে না
+        if (isFetching || !client.mailbox) return;
         isFetching = true;
-        let tempLock;
 
         try {
-            tempLock = await client.getMailboxLock('INBOX');
+            await client.noop(); 
+
+            // 💡 মাস্টার হ্যাক: ইনবক্সে মোট কতগুলো মেইল আছে সেটা বের করা
+            let totalMails = client.mailbox.exists || 1;
             
-            let yesterday = new Date();
-            yesterday.setDate(yesterday.getDate() - 1);
-            
-            let uids = await client.search({ seen: false, since: yesterday });
+            // 💡 শুধু শেষের ৩০টা মেইলের রেঞ্জ সেট করা (যেমন: মেইল যদি ৫০০০ হয়, তবে ৪৯৭০ থেকে ৫০০০ পর্যন্ত খুঁজবে)
+            let startSeq = Math.max(1, totalMails - 30); 
+
+            // ওই শেষের ৩০টা মেইলের মধ্যে যেগুলা আনরিড (seen: false), শুধু সেগুলাকেই ধরবে
+            let uids = await client.search({ seq: `${startSeq}:*`, seen: false }, { uid: true });
             
             if (uids && uids.length > 0) {
-                uids = uids.slice(-5); 
+                uids = uids.slice(-5); // সেফটির জন্য একবারে সর্বোচ্চ ৫টা প্রসেস করবে
                 
                 for (let uid of uids) {
-                    let emailData = await client.fetchOne(uid, { source: true }); 
+                    let emailData = await client.fetchOne(uid, { source: true }, { uid: true }); 
                     
                     if (emailData && emailData.source) {
                         let parsed = await simpleParser(emailData.source);
@@ -91,7 +94,7 @@ async function startEmailListener(onNewEmail) {
                         
                         let isIgnored = ignoreKeywords.some(keyword => senderAddress.includes(keyword));
                         
-                        await client.messageFlagsAdd(uid, ['\\Seen']); 
+                        await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true }); 
                         
                         if (!isIgnored) {
                             emailQueue.push({
@@ -100,6 +103,8 @@ async function startEmailListener(onNewEmail) {
                                 sender: senderAddress || "Unknown Sender",
                                 body: parsed.text || "" 
                             });
+                        } else {
+                            console.log(`⏭️ Ignored promotional email from: ${senderAddress}`);
                         }
                     }
                 }
@@ -107,9 +112,6 @@ async function startEmailListener(onNewEmail) {
         } catch (err) {
             console.error("❌ IMAP Search Error:", err.message);
         } finally {
-            if (tempLock) {
-                tempLock.release();
-            }
             isFetching = false;
             processQueue(); 
         }
@@ -119,18 +121,12 @@ async function startEmailListener(onNewEmail) {
         await client.connect();
         console.log("⚡ Gmail Server Connected!");
 
-        let initLock = await client.getMailboxLock('INBOX');
-        initLock.release(); 
-        console.log("🔓 INBOX active and securely listening for Real-time push emails...");
+        await client.mailboxOpen('INBOX');
+        console.log("📥 INBOX Opened! Scanning ONLY the last 30 emails for backlog...");
 
         client.on('close', () => {
             console.log("⚠️ Gmail Connection Dropped! Auto-reconnecting in 5 seconds...");
-            if (fallbackInterval) clearInterval(fallbackInterval);
-            
-            // 💡 এই দুটো লাইন না থাকার কারণেই বট চুপ মেরে যাচ্ছিল!
             isFetching = false; 
-            isProcessingQueue = false; 
-            
             setTimeout(() => startEmailListener(onNewEmail), 5000);
         });
 
@@ -139,21 +135,20 @@ async function startEmailListener(onNewEmail) {
         });
 
         client.on('exists', () => {
-            console.log("🔔 Push Notification: New email landed!");
+            console.log("🔔 Server Signal: New email landed!");
             checkMails();
         });
 
+        // বট চালু হওয়ার পর একবার ব্যাকলগ চেক করবে (লাস্ট ৩০টার মধ্যে)
         await checkMails();
 
-        fallbackInterval = setInterval(() => {
+        setInterval(() => {
             checkMails();
         }, 10000);
 
     } catch (error) {
         console.error("❌ IMAP Connection Error:", error.message);
-        if (fallbackInterval) clearInterval(fallbackInterval);
         isFetching = false;
-        isProcessingQueue = false;
         setTimeout(() => startEmailListener(onNewEmail), 10000);
     }
 }
