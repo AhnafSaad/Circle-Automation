@@ -66,7 +66,7 @@ async function startEmailListener(onNewEmail) {
     ];
 
     const checkMails = async () => {
-        // যদি মেইলবক্স এখনো ওপেন না হয়, তাহলে চেক করবে না
+        // যদি মেইলবক্স এখনো ওপেন না হয়, তাহলে চেক করবে না
         if (isFetching || !client.mailbox) return;
         isFetching = true;
 
@@ -76,7 +76,7 @@ async function startEmailListener(onNewEmail) {
             // 💡 মাস্টার হ্যাক: ইনবক্সে মোট কতগুলো মেইল আছে সেটা বের করা
             let totalMails = client.mailbox.exists || 1;
             
-            // 💡 শুধু শেষের ৩০টা মেইলের রেঞ্জ সেট করা (যেমন: মেইল যদি ৫০০০ হয়, তবে ৪৯৭০ থেকে ৫০০০ পর্যন্ত খুঁজবে)
+            // 💡 শুধু শেষের ৩০টা মেইলের রেঞ্জ সেট করা
             let startSeq = Math.max(1, totalMails - 30); 
 
             // ওই শেষের ৩০টা মেইলের মধ্যে যেগুলা আনরিড (seen: false), শুধু সেগুলাকেই ধরবে
@@ -91,20 +91,27 @@ async function startEmailListener(onNewEmail) {
                     if (emailData && emailData.source) {
                         let parsed = await simpleParser(emailData.source);
                         let senderAddress = parsed.from && parsed.from.value[0] ? parsed.from.value[0].address.toLowerCase() : "";
+                        let subject = parsed.subject || "(No Subject)";
                         
                         let isIgnored = ignoreKeywords.some(keyword => senderAddress.includes(keyword));
                         
+                        // 💡 নতুন যোগ করা লজিক: রিপ্লাই বা ফরোয়ার্ড মেইল কি না সেটা চেক করা
+                        let isReply = !!parsed.inReplyTo || subject.toLowerCase().startsWith('re:') || subject.toLowerCase().startsWith('fwd:');
+                        
                         await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true }); 
                         
-                        if (!isIgnored) {
+                        if (isIgnored) {
+                            console.log(`⏭️ Ignored promotional email from: ${senderAddress}`);
+                        } else if (isReply) {
+                            // 💡 যদি কাস্টমার রিপ্লাই দেয়, তবে সেটা ইগনোর করবে
+                            console.log(`⏭️ Ignored customer REPLY to avoid duplicate token: ${senderAddress}`);
+                        } else {
                             emailQueue.push({
                                 uid: uid,
-                                subject: parsed.subject || "(No Subject)", 
+                                subject: subject, 
                                 sender: senderAddress || "Unknown Sender",
                                 body: parsed.text || "" 
                             });
-                        } else {
-                            console.log(`⏭️ Ignored promotional email from: ${senderAddress}`);
                         }
                     }
                 }
