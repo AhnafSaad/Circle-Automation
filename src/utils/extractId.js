@@ -22,9 +22,17 @@ function extractDataFromEmail(email) {
         if (matchObj) u = matchObj[1].trim();
     }
 
-    // ৩. 🚀 নতুন লজিক: কোম্পানির নাম বা ব্যক্তির নাম এক্সট্রাক্ট করা
+    // ৩. 🚀 ইমেইল অ্যাড্রেস চেক (বডিতে valid TLD সহ থাকলে সেটাই নিবে)
     if (!u) {
-        const nameMatch = b.match(/(?:company(?: name)?|organization|isp(?: name)?|name(?: is)?)\s*[:=-]?\s*([a-zA-Z0-9\s.&-]+)(?:\n|\r|$|<|,|\.)/i);
+        const emailMatch = b.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+        if (emailMatch) u = emailMatch[0];
+    }
+
+    // ৪. 🚀 কোম্পানির নাম বা ব্যক্তির নাম এক্সট্রাক্ট করা
+    // ⚠️ ফিক্স: lazy quantifier (+?) ব্যবহার করা হয়েছে, যাতে প্রথম terminator
+    // (., কমা, নিউলাইন ইত্যাদি) পেলেই থেমে যায়, পুরো পরের বাক্য গিলে না ফেলে
+    if (!u) {
+        const nameMatch = b.match(/(?:company(?: name)?|organization|isp(?: name)?|name(?: is)?)\s*[:=-]?\s*([a-zA-Z0-9\s&-]+?)(?:\n|\r|$|<|,|\.|!|\?)/i);
         if (nameMatch && nameMatch[1]) {
             let extracted = nameMatch[1].trim();
             extracted = extracted.replace(/^(is\s+|the\s+)/i, '').trim(); 
@@ -34,7 +42,7 @@ function extractDataFromEmail(email) {
         }
     }
 
-    // ৪. ফলব্যাক: শুধু আইডি (সংখ্যাসহ)
+    // ৫. ফলব্যাক: শুধু আইডি (সংখ্যাসহ)
     if (!u) {
         const w = b.split(/\s+/);
         for (const k of w) {
@@ -45,7 +53,7 @@ function extractDataFromEmail(email) {
         }
     }
 
-    // ৫. মাস্টার ফলব্যাক: বডিতে কিছু না পেলে সেন্ডারের ইমেইল নিবে
+    // ৬. মাস্টার ফলব্যাক: বডিতে কিছু না পেলে সেন্ডারের ইমেইল নিবে
     if (!u && s) {
         u = s; 
     }

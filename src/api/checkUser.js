@@ -53,6 +53,8 @@ async function verifyClientFromAPI(extractedId) {
             let actualName = null;
             let isTicketVerified = false;
 
+            console.log(`🎫 [Ticket API] Fields to try: ${searchFields.join(', ')} | Value: "${extractedId}"`);
+
             // লুপ চালিয়ে ফিল্ড অনুযায়ী চেক করবে
             for (let field of searchFields) {
                 const ticketBody = { 
@@ -61,24 +63,39 @@ async function verifyClientFromAPI(extractedId) {
                     API_SECRET: ticketSecret 
                 };
 
-                const res = await axios.post(ticketUrl, ticketBody, {
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
+                // ⚠️ ফিক্স: প্রতিটা ফিল্ডের জন্য আলাদা try/catch, যাতে একটা ফিল্ড
+                // fail করলেও (যেমন 4xx/5xx) বাকি ফিল্ডগুলো চেক হওয়া বন্ধ না হয়ে যায়
+                try {
+                    console.log(`   ↳ Trying field="${field}" ...`);
+                    const res = await axios.post(ticketUrl, ticketBody, {
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json'
+                        }
+                    });
+
+                    console.log(`   ↳ Response [${field}]: success=${res.data?.success}, matches=${res.data?.data?.length || 0}`);
+
+                    // যদি এই ফিল্ডে ডেটা পাওয়া যায়
+                    if (res.status === 200 && res.data && res.data.success && res.data.data && res.data.data.length > 0) {
+                        // টিকিট এপিআইতে name মানে Owner Name
+                        actualName = res.data.data[0].name;
+                        isTicketVerified = true;
+                        break; // ডেটা পেয়ে গেলে লুপ ব্রেক করে দিবে
                     }
-                });
-                
-                // যদি এই ফিল্ডে ডেটা পাওয়া যায়
-                if (res.status === 200 && res.data && res.data.success && res.data.data && res.data.data.length > 0) {
-                    // টিকিট এপিআইতে name মানে Owner Name
-                    actualName = res.data.data[0].name;
-                    isTicketVerified = true;
-                    break; // ডেটা পেয়ে গেলে লুপ ব্রেক করে দিবে
+                } catch (fieldError) {
+                    const status = fieldError.response ? fieldError.response.status : 'Unknown';
+                    const msg = fieldError.response ? JSON.stringify(fieldError.response.data) : fieldError.message;
+                    console.log(`   ↳ ❌ Field "${field}" Error (Status ${status}): ${msg}`);
+                    // এই ফিল্ড fail করলেও পরের ফিল্ডে (name) যাবে, লুপ থামবে না
                 }
             }
 
             if (isTicketVerified) {
+                console.log(`   ↳ ✅ Ticket API Matched! Owner: ${actualName}`);
                 return { isVerified: true, clientType: 'Ticket', exactUsername: actualName };
+            } else {
+                console.log(`   ↳ ❌ Ticket API: No match found in any field.`);
             }
 
         } else {
