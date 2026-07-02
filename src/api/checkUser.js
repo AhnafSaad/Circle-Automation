@@ -1,6 +1,6 @@
 const axios = require('axios');
 
-async function verifyClientFromAPI(extractedId) {
+async function verifyClientFromAPI(extractedId, senderEmail) {
     // ১. Radius API চেক
     try {
         const radiusUrl = process.env.RADIUS_CHECK_API_URL;
@@ -20,7 +20,8 @@ async function verifyClientFromAPI(extractedId) {
             
             if (res.status === 200 && res.data && res.data.data) {
                 const actualUsername = res.data.data.username; 
-                return { isVerified: true, clientType: 'Radius', exactUsername: actualUsername };
+                const clientId = res.data.data.id; // ✅ CID — token create API-তে এটাই পাঠানো হবে
+                return { isVerified: true, clientType: 'Radius', exactUsername: actualUsername, clientId: clientId };
             }
         }
     } catch (e) {
@@ -36,29 +37,39 @@ async function verifyClientFromAPI(extractedId) {
         
         if (ticketUrl && ticketUrl.trim() !== '') {
             
-            let searchFields = []; 
-
             const mobileRegex = /^(?:\+?88)?01[3-9]\d{8}$/;
             const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
+            // 🎯 প্রধান টার্গেট: sender-এর email দিয়ে সবার আগে ভেরিফাই করা হবে
+            // তারপর extractedId এর format অনুযায়ী বাকি ফিল্ডগুলো (fallback)
+            let candidates = [];
+
+            if (senderEmail && emailRegex.test(senderEmail)) {
+                candidates.push({ field: "email", value: senderEmail });
+            }
+
             if (mobileRegex.test(extractedId)) {
-                searchFields = ["mobile"];
+                candidates.push({ field: "mobile", value: extractedId });
             } else if (emailRegex.test(extractedId)) {
-                searchFields = ["email"];
+                // sender email এর সাথে একই হলে ডুপ্লিকেট কল এড়ানো হবে
+                if (!senderEmail || extractedId.toLowerCase() !== senderEmail.toLowerCase()) {
+                    candidates.push({ field: "email", value: extractedId });
+                }
             } else {
                 // 🚀 যদি মোবাইল বা ইমেইল না হয়, তবে প্রথমে companyname এরপর name (Owner Name) এ খুঁজবে
-                searchFields = ["companyname", "name"];
+                candidates.push({ field: "companyname", value: extractedId });
+                candidates.push({ field: "name", value: extractedId });
             }
 
             let actualName = null;
             let isTicketVerified = false;
 
-            console.log(`🎫 [Ticket API] Fields to try: ${searchFields.join(', ')} | Value: "${extractedId}"`);
+            console.log(`🎫 [Ticket API] Candidates to try: ${candidates.map(c => `${c.field}="${c.value}"`).join(', ')}`);
 
-            // লুপ চালিয়ে ফিল্ড অনুযায়ী চেক করবে
-            for (let field of searchFields) {
+            // লুপ চালিয়ে প্রতিটি candidate অনুযায়ী চেক করবে (sender email সবসময় প্রথমে)
+            for (let { field, value } of candidates) {
                 const ticketBody = { 
-                    value: extractedId, 
+                    value: value, 
                     field: field, 
                     API_SECRET: ticketSecret 
                 };
@@ -66,7 +77,7 @@ async function verifyClientFromAPI(extractedId) {
                 // ⚠️ ফিক্স: প্রতিটা ফিল্ডের জন্য আলাদা try/catch, যাতে একটা ফিল্ড
                 // fail করলেও (যেমন 4xx/5xx) বাকি ফিল্ডগুলো চেক হওয়া বন্ধ না হয়ে যায়
                 try {
-                    console.log(`   ↳ Trying field="${field}" ...`);
+                    console.log(`   ↳ Trying field="${field}" value="${value}" ...`);
                     const res = await axios.post(ticketUrl, ticketBody, {
                         headers: { 
                             'Content-Type': 'application/json',
@@ -93,7 +104,7 @@ async function verifyClientFromAPI(extractedId) {
 
             if (isTicketVerified) {
                 console.log(`   ↳ ✅ Ticket API Matched! Owner: ${actualName}`);
-                return { isVerified: true, clientType: 'Ticket', exactUsername: actualName };
+                return { isVerified: true, clientType: 'Ticket', exactUsername: actualName, clientId: null }; // ⚠️ Ticket API-তে numeric CID নেই
             } else {
                 console.log(`   ↳ ❌ Ticket API: No match found in any field.`);
             }
@@ -105,7 +116,7 @@ async function verifyClientFromAPI(extractedId) {
         console.log(`❌ Ticket API Error: ${e.message}`);
     }
 
-    return { isVerified: false, clientType: null, exactUsername: null };
+    return { isVerified: false, clientType: null, exactUsername: null, clientId: null };
 }
 
 module.exports = { verifyClientFromAPI };
