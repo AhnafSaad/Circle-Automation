@@ -1,19 +1,15 @@
 const axios = require('axios');
 
 /**
- * Radius প্যানেলে টোকেন ক্রিয়েট করে সরাসরি API কল করে (No Puppeteer / No Scraping).
- *
- * Payload: { API_SECRET, clientId, description }
- *
- * @param {number|string} clientId - client-search API রেসপন্স থেকে পাওয়া numeric CID
- * @param {string} clientType - 'Radius' | 'Ticket'
- * @param {string} issueSummary - Gemini দিয়ে জেনারেট করা ইস্যু সামারি
- * @returns {Promise<string>} - সফল হলে টোকেন আইডি (যেমন "TKN-12345"), ব্যর্থ হলে "Failed"
+ * @param {number|string} clientId 
+ * @param {string} clientType 
+ * @param {string} issueSummary 
+ * @returns {Promise<string>} 
  */
 async function generateTokenViaAPI(clientId, clientType, issueSummary) {
     try {
         if (!clientId) {
-            console.log(`❌ clientId পাওয়া যায়নি (clientType: ${clientType}) — টোকেন তৈরি করা সম্ভব নয়।`);
+            console.log(`❌ clientId not found (clientType: ${clientType}) — cannot generate token.`);
             return 'Failed';
         }
 
@@ -30,9 +26,10 @@ async function generateTokenViaAPI(clientId, clientType, issueSummary) {
         const payload = {
             API_SECRET: apiSecret,
             clientId: clientId,
-            description: `[Bot Generated] Issue: ${issueSummary}`
+            description: `${issueSummary} [Bot Generated]`
         };
 
+        
         const res = await axios.post(apiUrl, payload, {
             headers: {
                 'Content-Type': 'application/json',
@@ -42,8 +39,7 @@ async function generateTokenViaAPI(clientId, clientType, issueSummary) {
 
         console.log('🔎 [API] Raw response:', JSON.stringify(res.data));
 
-        // ✅ HTTP status কোড strictly 200 না হলেও (201 ইত্যাদি) response body-তে success
-        // থাকতে পারে, তাই body-র ভেতরের status/token existence দিয়ে যাচাই করা হচ্ছে
+
         const d = res.data?.data || res.data;
         const bodyIndicatesSuccess = res.data?.status === 'success' || res.data?.success === true;
 
@@ -63,7 +59,7 @@ async function generateTokenViaAPI(clientId, clientType, issueSummary) {
                 return finalToken;
             }
 
-            console.log('⚠️ API সফল রেসপন্স দিয়েছে কিন্তু token ID খুঁজে পাওয়া যায়নি। উপরের Raw response দেখে extraction লজিক ঠিক করুন।');
+            console.log('⚠️ API returned a successful response but no token ID was found. Check the extraction logic against the raw response above.');
             return 'Failed';
         }
 

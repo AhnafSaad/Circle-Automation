@@ -95,8 +95,9 @@ async function startEmailListener(onNewEmail) {
                         
                         let isIgnored = ignoreKeywords.some(keyword => senderAddress.includes(keyword));
                         
-                        // 💡 নতুন যোগ করা লজিক: রিপ্লাই বা ফরোয়ার্ড মেইল কি না সেটা চেক করা
-                        let isReply = !!parsed.inReplyTo || subject.toLowerCase().startsWith('re:') || subject.toLowerCase().startsWith('fwd:');
+                        // 💡 রিপ্লাই বা ফরোয়ার্ড মেইল কি না সেটা চেক করা (In-Reply-To / References header + subject prefix)
+                        let subjTrimmed = subject.toLowerCase().trim();
+                        let isReply = !!parsed.inReplyTo || !!parsed.references || subjTrimmed.startsWith('re:') || subjTrimmed.startsWith('fwd:') || subjTrimmed.startsWith('fw:');
                         
                         await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true }); 
                         

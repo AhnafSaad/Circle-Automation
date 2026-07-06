@@ -5,7 +5,16 @@ async function summarizeIssueWithAI(emailBody) {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash"}); 
         
-        const prompt = `You are a professional customer support assistant. Summarize the customer issue in a clear, professional manner. Keep it concise (2-3 sentences) and focus on the key problem reported. If no technical issue is specified, state 'not yet specified'.\n\nCustomer Email:\n${emailBody}`;
+        const prompt = `Extract ONLY the core technical issue from the following customer email. 
+        Rules:
+        1. Maximum 40 characters long.
+        2. 2 to 8 words only.
+        3. NO full sentences. NO conversational fillers (e.g., "The customer...", "User issue is...").
+        4. Just output the exact problem (e.g., "Router connection issue", "Slow internet").
+        5. If no technical issue is mentioned, output exactly "Not specified".
+        
+        Customer Email:
+        ${emailBody}`;;
         
         const result = await model.generateContent(prompt);
         return result.response.text().trim();

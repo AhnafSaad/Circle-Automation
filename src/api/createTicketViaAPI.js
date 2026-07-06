@@ -3,11 +3,13 @@ const axios = require('axios');
 /**
  * Creates a new ticket via the API
  *
- * @param {string} ownerName - Ticket-search API থেকে পাওয়া owner name (exactUsername)
+ * @param {string} ownerName - Ticket-search API থেকে পাওয়া owner name
+ * @param {string} orderId - নির্ধারিত/কনফার্ম করা order_id
+ * @param {string} softwareName - 'WCL' | 'ITES'
  * @param {string} issueSummary - Gemini দিয়ে জেনারেট করা ইস্যু সামারি
  * @returns {Promise<string>} - সফল হলে ticket ID, ব্যর্থ হলে "Failed"
  */
-async function createTicketViaAPI(ownerName, issueSummary) {
+async function createTicketViaAPI(ownerName, orderId, softwareName, issueSummary) {
     try {
         const apiUrl = process.env.TICKET_CREATE_API_URL;
         const apiSecret = process.env.TICKET_API_SECRET;
@@ -17,12 +19,14 @@ async function createTicketViaAPI(ownerName, issueSummary) {
             return 'Failed';
         }
 
-        console.log(`\n🎫 [API] Creating ticket for: ${ownerName}`);
+        console.log(`\n🎫 [API] Creating ticket for: ${ownerName} | software=${softwareName} order_id=${orderId}`);
 
         // ⚠️ TODO: actual field name কনফার্ম হওয়া পর্যন্ত এটা অনুমান
         const payload = {
             API_SECRET: apiSecret,
             name: ownerName,
+            order_id: orderId,
+            software_name: softwareName,
             description: `[Bot Generated] Issue: ${issueSummary}`
         };
 

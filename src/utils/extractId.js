@@ -62,4 +62,80 @@ function extractDataFromEmail(email) {
     return u && u.length >= 3 && u.length <= 60 ? { skip: false, u, s, r, b } : { skip: true };
 }
 
-module.exports = { extractDataFromEmail };
+/**
+ * 🎫 Ticket Flow-এর জন্য: বডিতে explicit "<Software> Order ID: <num>" প্যাটার্ন খোঁজে।
+ * যেমন: "WCL Order ID: 1006", "ITES Order ID: 3954", "WCL Order ID #5165"
+ * শুধু "Order ID: 123" (software ছাড়া) এখানে ধরা হবে না — সেটা fallback logic-এ যাবে।
+ *
+ * @param {string} body
+ * @returns {Array<{software: string, orderId: string}>} — ডুপ্লিকেট বাদে
+ */
+function extractOrderPatterns(body) {
+    if (!body) return [];
+    const regex = /\b(WCL|ITES)\b\s*Order\s*ID\s*:?\s*#?\s*(\d+)/gi;
+    const seen = new Set();
+    const results = [];
+    let match;
+    while ((match = regex.exec(body)) !== null) {
+        const software = match[1].toUpperCase();
+        const orderId = match[2];
+        const key = `${software}-${orderId}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            results.push({ software, orderId });
+        }
+    }
+    return results;
+}
+
+/**
+ * 🎫 Ticket Flow verification-এর জন্য: বডিতে উল্লেখিত সব ইমেইল অ্যাড্রেস বের করে
+ * (sender-এর নিজস্ব ইমেইল বাদ দিয়ে, ডুপ্লিকেট বাদে, বডিতে যে ক্রমে পাওয়া যায় সেই ক্রমে)
+ *
+ * @param {string} body
+ * @param {string} excludeEmail - সাধারণত sender-এর ইমেইল
+ * @returns {string[]}
+ */
+function extractEmailsFromBody(body, excludeEmail = "") {
+    if (!body) return [];
+    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+    const excludeLower = (excludeEmail || "").toLowerCase();
+    const seen = new Set();
+    const results = [];
+    let match;
+    while ((match = emailRegex.exec(body)) !== null) {
+        const email = match[0];
+        const emailLower = email.toLowerCase();
+        if (emailLower !== excludeLower && !seen.has(emailLower)) {
+            seen.add(emailLower);
+            results.push(email);
+        }
+    }
+    return results;
+}
+
+/**
+ * 🎫 Ticket Flow verification-এর শেষ fallback candidate হিসেবে:
+ * বডি থেকে company/organization/isp নাম বের করার চেষ্টা করে।
+ *
+ * @param {string} body
+ * @returns {string|null}
+ */
+function extractCompanyName(body) {
+    if (!body) return null;
+    const nameMatch = body.match(/(?:company(?: name)?|organization|isp(?: name)?)\s*[:=-]?\s*([a-zA-Z0-9\s&-]+?)(?:\n|\r|$|<|,|\.|!|\?)/i);
+    if (nameMatch && nameMatch[1]) {
+        let extracted = nameMatch[1].trim().replace(/^(is\s+|the\s+)/i, '').trim();
+        if (extracted.length >= 3 && extracted.length <= 40) {
+            return extracted;
+        }
+    }
+    return null;
+}
+
+module.exports = {
+    extractDataFromEmail,
+    extractOrderPatterns,
+    extractEmailsFromBody,
+    extractCompanyName,
+};
