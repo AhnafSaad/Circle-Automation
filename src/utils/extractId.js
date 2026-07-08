@@ -28,11 +28,12 @@ function extractDataFromEmail(email) {
         if (emailMatch) u = emailMatch[0];
     }
 
-    // ৪. 🚀 কোম্পানির নাম বা ব্যক্তির নাম এক্সট্রাক্ট করা
+    // ৪. 🚀 কোম্পানির নাম এক্সট্র্যাক্ট করা (শুধু company/organization/isp name — জেনেরিক "name" বাদ,
+    // কারণ প্রমোশনাল মেইলে "Package Name: Free 718" টাইপ লাইনকে ভুলভাবে ধরে ফেলছিল)
     // ⚠️ ফিক্স: lazy quantifier (+?) ব্যবহার করা হয়েছে, যাতে প্রথম terminator
     // (., কমা, নিউলাইন ইত্যাদি) পেলেই থেমে যায়, পুরো পরের বাক্য গিলে না ফেলে
     if (!u) {
-        const nameMatch = b.match(/(?:company(?: name)?|organization|isp(?: name)?|name(?: is)?)\s*[:=-]?\s*([a-zA-Z0-9\s&-]+?)(?:\n|\r|$|<|,|\.|!|\?)/i);
+        const nameMatch = b.match(/(?:company(?: name)?|organization|isp(?: name)?)\s*[:=-]?\s*([a-zA-Z0-9\s&-]+?)(?:\n|\r|$|<|,|\.|!|\?)/i);
         if (nameMatch && nameMatch[1]) {
             let extracted = nameMatch[1].trim();
             extracted = extracted.replace(/^(is\s+|the\s+)/i, '').trim(); 
@@ -42,14 +43,27 @@ function extractDataFromEmail(email) {
         }
     }
 
-    // ৫. ফলব্যাক: শুধু আইডি (সংখ্যাসহ)
+    // ৫. ফলব্যাক: শুধু আইডি (সংখ্যাসহ) — শুধু তখনই গ্রহণ করা হবে যদি
+    // সেই শব্দটা যে লাইনে আছে সেখানে context keyword (id/account/mobile/cid/client/username/order/phone) থাকে।
+    // ⚠️ আগে একটা junk-word blocklist ছিল (free/offer/discount...), কিন্তু সেটা বাদ দেওয়া হলো —
+    // কারণ real username-এও "free718" টাইপ শব্দ থাকতে পারে (যেমন client-এর ইউজারনেম), আর
+    // context-keyword চেকটাই যথেষ্ট নিরাপদ (কনটেক্সট ছাড়া কোনো সংখ্যা এমনিতেই ধরা পড়বে না)।
     if (!u) {
-        const w = b.split(/\s+/);
-        for (const k of w) {
-            const c = k.replace(/[,.]/g, '').trim();
-            if (/^[a-zA-Z0-9_-]{4,12}$/.test(c) && /\d/.test(c)) { 
-                u = c; break; 
+        const contextKeywords = /\b(id|account|mobile|cid|client|username|order|phone|no)\b/i;
+        const lines = b.split(/[\r\n]+/);
+        for (const line of lines) {
+            if (!contextKeywords.test(line)) continue; // এই লাইনে কোনো context keyword না থাকলে স্কিপ
+            const tokens = line.split(/\s+/);
+            for (const k of tokens) {
+                const c = k.replace(/[,.:]/g, '').trim();
+                if (/^[a-zA-Z0-9_-]{4,12}$/.test(c) && /\d/.test(c)) {
+                    const alphaPart = c.replace(/[\d_-]/g, '').toLowerCase();
+                    if (contextKeywords.test(alphaPart)) continue; // "id"/"cid" শব্দটা নিজেই যেন ধরা না পড়ে
+                    u = c;
+                    break;
+                }
             }
+            if (u) break;
         }
     }
 

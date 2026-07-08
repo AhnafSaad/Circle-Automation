@@ -7,6 +7,8 @@ const ignoreKeywords = [
     'postman', 'realmadrid', 'github', 'gitlab', 'vercel', 'heroku', 'render', 'mongodb',
     'dazn', 'binance', 'shopify', 'coursera', 'n8n', 'promotions', 'marketing',
     'newsletter', 'no-reply', 'noreply', 'alerts',
+    // ✅ নতুন যোগ করা হলো — এটাই আসল কারণ ছিল ভুল রিপ্লাই যাওয়ার
+    'fontawesome.com', 'mailchimp', 'sendgrid', 'campaign-archive', 'substack',
     // ⚠️ 'support@', 'info@', 'team@' এখান থেকে সরিয়ে দেওয়া হয়েছে —
     // অনেক আসল ক্লায়েন্ট/ISP নিজেদের support desk থেকেই মেইল পাঠায়
     // (যেমন: support@globalonlinebd.com), সেগুলোকে ভুলভাবে ইগনোর করে ফেলছিল।
@@ -22,8 +24,8 @@ const ignoreKeywords = [
 /**
  * Creates an independent email account handler (IMAP listener + SMTP sender).
  * Works for any provider that supports standard IMAP/SMTP (Gmail, cPanel, Zoho, Titan, etc).
- * NOTE: This does NOT support Microsoft 365 / Exchange Online accounts that have.
- * Basic Authentication disabled — those require OA=uth2 / Microsoft Graph API instead.
+ * NOTE: This does NOT support Microsoft 365 / Exchange Online accounts that have
+ * Basic Authentication disabled — those require OAuth2 / Microsoft Graph API instead.
  *
  * @param {Object} config
  * @param {string} config.name          - Friendly label for logs, e.g. "Gmail" / "Business"
@@ -169,7 +171,7 @@ function createMailAccount(config) {
             });
 
             client.on('error', (err) => {
-                console.error(`❌ [${name}] IMAP Client Error:`, err.message);
+                console.error(`❌ [${name}] IMAP Client Error:`, err.message || err.code || err.name || String(err));
             });
 
             client.on('exists', () => {
@@ -184,7 +186,8 @@ function createMailAccount(config) {
             }, 10000);
 
         } catch (error) {
-            console.error(`❌ [${name}] IMAP Connection Error:`, error.message);
+            const detail = error.message || error.code || error.name || error.response || String(error);
+            console.error(`❌ [${name}] IMAP Connection Error:`, detail);
             isFetching = false;
             setTimeout(() => startEmailListener(onNewEmail), 10000);
         }

@@ -1,5 +1,23 @@
 require('dotenv').config();
 
+// 📊 Dashboard hook — প্রতিটা console.log/error automatically ক্যাপচার হয়ে
+// dashboard/dashboard-data.json-এ যাবে (সব dashboard-সংক্রান্ত ফাইল এই একটাই ফোল্ডারে)।
+// ⚠️ বাকি কোনো ফাইলে কোনো পরিবর্তন লাগেনি — এটা console.log নিজেই override করে।
+const dashboardStore = require('./dashboard/logStore');
+const _origLog = console.log;
+const _origError = console.error;
+function _stringifyArgs(args) {
+    return args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+}
+console.log = (...args) => {
+    dashboardStore.log(_stringifyArgs(args));
+    _origLog(...args);
+};
+console.error = (...args) => {
+    dashboardStore.log(_stringifyArgs(args));
+    _origError(...args);
+};
+
 const { createMailAccount } = require('./src/email/mailAccount');
 const {
     extractDataFromEmail,
@@ -201,6 +219,9 @@ async function handleIncomingEmail(email, account) {
 
 async function startBot() {
     console.log("🤖 Support Bot started... Initializing Hybrid Push + Polling System.\n");
+
+    dashboardStore.heartbeat();
+    setInterval(() => dashboardStore.heartbeat(), 5000);
 
     for (const cfg of accountsConfig) {
         if (!cfg.user || !cfg.pass || !cfg.imapHost || !cfg.smtpHost) {
