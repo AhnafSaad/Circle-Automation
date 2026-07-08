@@ -21,13 +21,32 @@ async function createTicketViaAPI(ownerName, orderId, softwareName, issueSummary
 
         console.log(`\n🎫 [API] Creating ticket for: ${ownerName} | software=${softwareName} order_id=${orderId}`);
 
+        // 🔧 subject: issueSummary পাওয়া গেলে সেটাই ব্যবহার হবে, না হলে একটা ডিফল্ট subject বসবে
+        // এভাবে "Not specified" আসলেও subject খালি থাকবে না
+        const safeSummary =
+            issueSummary && issueSummary.trim() && issueSummary.trim().toLowerCase() !== 'not specified'
+                ? issueSummary.trim()
+                : `Support request from ${ownerName} (Order ID: ${orderId})`;
+
+        const subject = `[${softwareName}] ${safeSummary}`.slice(0, 150); // অনেক API-তে subject-এর length limit থাকে
+
+        // 🔧 category: আপাতত সবসময় "Follow-UP" ডিফল্ট হিসেবে পাঠানো হচ্ছে
+        const category = 'Follow-UP';
+
+        // 🔧 priority: এখন সবসময় ডিফল্ট "medium" পাঠানো হচ্ছে
+        // চাইলে issueSummary-তে "urgent"/"asap" জাতীয় শব্দ থাকলে "high" ও সেট করা যায়
+        const priority = 'medium';
+
         // ⚠️ TODO: actual field name কনফার্ম হওয়া পর্যন্ত এটা অনুমান
         const payload = {
             API_SECRET: apiSecret,
             name: ownerName,
             order_id: orderId,
             software_name: softwareName,
-            description: `[Bot Generated] Issue: ${issueSummary}`
+            description: `Issue: ${issueSummary} [Bot Generated]`,
+            subject: subject,
+            category: category,
+            priority: priority
         };
 
         const res = await axios.post(apiUrl, payload, {
