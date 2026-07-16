@@ -1,46 +1,47 @@
+const fs = require('fs');
+const path = require('path');
 const nodemailer = require('nodemailer');
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 
+// 🚀  ইগনোর লিস্ট 
 const ignoreKeywords = [
     'linkedin', 'instagram', 'facebook', 'twitter', 'x.com', 'youtube', 'pinterest',
     'postman', 'realmadrid', 'github', 'gitlab', 'vercel', 'heroku', 'render', 'mongodb',
     'dazn', 'binance', 'shopify', 'coursera', 'n8n', 'promotions', 'marketing',
     'newsletter', 'no-reply', 'noreply', 'alerts',
-    // ✅ নতুন যোগ করা হলো — এটাই আসল কারণ ছিল ভুল রিপ্লাই যাওয়ার
     'fontawesome.com', 'mailchimp', 'sendgrid', 'campaign-archive', 'substack',
-    // ⚠️ 'support@', 'info@', 'team@' এখান থেকে সরিয়ে দেওয়া হয়েছে —
-    // অনেক আসল ক্লায়েন্ট/ISP নিজেদের support desk থেকেই মেইল পাঠায়
-    // (যেমন: support@globalonlinebd.com), সেগুলোকে ভুলভাবে ইগনোর করে ফেলছিল।
-
-    // ✅ এগুলো আমাদের নিজস্ব সিস্টেমের ঠিকানা (ticket/billing notification, NOC log copy) —
-    // নির্দিষ্ট ঠিকানা হওয়ায় অন্য কোনো real client মেইলকে প্রভাবিত করবে না।
     'ticket@windstreamcommunication.net',
     'ticket@yetfix.net',
     'ticket1@circlenetworkbd.com',
     'ites_billing@yetfix.net',
 ];
 
+// 🚀 ইন্টারনাল স্টাফ ডোমেইন
+const internalDomains = [
+    '@windstreamcommunication.net',
+    '@circlenetworkbd.com',
+    '@yetfix.net'
+];
+
+// 🚀 ড্যাশবোর্ডের JSON ফাইল থেকে লাইভ ইগনোর লিস্ট পড়ার ফাংশন
+function getDynamicIgnoreList() {
+    const ignoreListPath = path.join(__dirname, '../../dashboard/ignore-list.json');
+    if (!fs.existsSync(ignoreListPath)) return [];
+    try {
+        return JSON.parse(fs.readFileSync(ignoreListPath, 'utf8'));
+    } catch (e) {
+        return [];
+    }
+}
+
 /**
  * Creates an independent email account handler (IMAP listener + SMTP sender).
- * Works for any provider that supports standard IMAP/SMTP (Gmail, cPanel, Zoho, Titan, etc).
- * NOTE: This does NOT support Microsoft 365 / Exchange Online accounts that have
- * Basic Authentication disabled — those require OAuth2 / Microsoft Graph API instead.
- *
- * @param {Object} config
- * @param {string} config.name          - Friendly label for logs, e.g. "Gmail" / "Business"
- * @param {string} config.user          - Mailbox login (email address)
- * @param {string} config.pass          - Mailbox password / app password
- * @param {string} config.imapHost
- * @param {number} [config.imapPort=993]
- * @param {string} config.smtpHost
- * @param {number} [config.smtpPort=465]
- * @param {boolean} [config.smtpSecure=true]
  */
 function createMailAccount(config) {
     const {
         name = 'Account',
-        user,
+        user, // বটের নিজস্ব ইমেইল এড্রেস
         pass,
         imapHost,
         imapPort = 993,
@@ -56,7 +57,7 @@ function createMailAccount(config) {
     const transporter = nodemailer.createTransport({
         host: smtpHost,
         port: smtpPort,
-        secure: smtpSecure, // true for 465, false for 587 (STARTTLS)
+        secure: smtpSecure,
         auth: { user, pass },
     });
 
@@ -99,7 +100,6 @@ function createMailAccount(config) {
                     console.error(`❌ [${name}] Process Error:`, error.message);
                 }
             }
-
             isProcessingQueue = false;
         };
 
@@ -112,11 +112,14 @@ function createMailAccount(config) {
 
                 let totalMails = client.mailbox.exists || 1;
                 let startSeq = Math.max(1, totalMails - 30);
-
                 let uids = await client.search({ seq: `${startSeq}:*`, seen: false }, { uid: true });
 
                 if (uids && uids.length > 0) {
                     uids = uids.slice(-5);
+                    
+                    // 🚀 হার্ডকোডেড এবং ড্যাশবোর্ডের ডাইনামিক লিস্ট দুটোকে একসাথে মার্জ করা হলো
+                    const dynamicIgnoreList = getDynamicIgnoreList(); 
+                    const allIgnoreKeywords = [...ignoreKeywords, ...dynamicIgnoreList];
 
                     for (let uid of uids) {
                         let emailData = await client.fetchOne(uid, { source: true }, { uid: true });
@@ -126,15 +129,39 @@ function createMailAccount(config) {
                             let senderAddress = parsed.from && parsed.from.value[0] ? parsed.from.value[0].address.toLowerCase() : "";
                             let subject = parsed.subject || "(No Subject)";
 
-                            let isIgnored = ignoreKeywords.some(keyword => senderAddress.includes(keyword));
+                            // ১. ইগনোর লিস্ট চেক
+                            let isIgnored = allIgnoreKeywords.some(keyword => senderAddress.includes(keyword.toLowerCase()));
 
+                            // ২. ইন্টারনাল ডোমেইন চেক
+                            let isInternal = internalDomains.some(domain => senderAddress.endsWith(domain));
+
+                            // ৩. CC লজিক (বট কি 'To' তে আছে নাকি শুধু 'CC' তে?)
+                            let isInTo = false;
+                            if (parsed.to && parsed.to.value) {
+                                isInTo = parsed.to.value.some(r => r.address && r.address.toLowerCase() === user.toLowerCase());
+                            }
+                            
+                            let isInCC = false;
+                            if (parsed.cc && parsed.cc.value) {
+                                isInCC = parsed.cc.value.some(r => r.address && r.address.toLowerCase() === user.toLowerCase());
+                            }
+                            
+                            // যদি বট CC তে থাকে কিন্তু To তে না থাকে
+                            let isOnlyCC = isInCC && !isInTo;
+
+                            // ৪. রিপ্লাই চেক
                             let subjTrimmed = subject.toLowerCase().trim();
                             let isReply = !!parsed.inReplyTo || !!parsed.references || subjTrimmed.startsWith('re:') || subjTrimmed.startsWith('fwd:') || subjTrimmed.startsWith('fw:');
 
                             await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
 
+                            // কন্ডিশনাল স্কিপিং
                             if (isIgnored) {
-                                console.log(`⏭️ [${name}] Ignored promotional email from: ${senderAddress}`);
+                                console.log(`⏭️ [${name}] Ignored promotional/blocked email from: ${senderAddress}`);
+                            } else if (isInternal) {
+                                console.log(`⏭️ [${name}] Ignored internal staff email from: ${senderAddress}`);
+                            } else if (isOnlyCC) {
+                                console.log(`⏭️ [${name}] Ignored email (Bot is only in CC, not TO): ${senderAddress}`);
                             } else if (isReply) {
                                 console.log(`⏭️ [${name}] Ignored customer REPLY to avoid duplicate token: ${senderAddress}`);
                             } else {
@@ -143,7 +170,7 @@ function createMailAccount(config) {
                                     subject,
                                     sender: senderAddress || "Unknown Sender",
                                     body: parsed.text || "",
-                                    account: name, // 💡 কোন অ্যাকাউন্ট থেকে মেইলটা এসেছে তা ট্র্যাক করার জন্য
+                                    account: name,
                                 });
                             }
                         }

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const STYLE = `
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
@@ -25,6 +25,28 @@ const STYLE = `
   .nav-item{ display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:8px; font-size:13px; font-weight:600; color:var(--text-dim); cursor:pointer; border:1px solid transparent; transition:all .15s ease; }
   .nav-item:hover{ background:var(--panel-2); color:var(--text); }
   .nav-item.active{ background:var(--accent-dim); color:#7a5a12; border-color:#eddca2; }
+  
+  .badge { background: var(--red); color: #fff; border-radius: 10px; padding: 2px 6px; font-size: 10px; margin-left: auto; font-weight: 700; line-height: 1; }
+  .ignore-panel { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+  .ignore-header h2 { margin: 0 0 8px 0; font-size: 18px; color: var(--text); }
+  .ignore-header p { margin: 0; font-size: 13px; color: var(--text-faint); }
+  .ignore-input-group { display: flex; gap: 10px; }
+  .ignore-input { flex: 1; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); font-family: var(--sans); font-size: 14px; color: var(--text); outline: none; transition: border .2s; }
+  .ignore-input:focus { border-color: var(--blue); }
+  .ignore-select { width: 160px; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); font-family: var(--sans); font-size: 13px; color: var(--text); outline: none; cursor: pointer; }
+  .ignore-select:focus { border-color: var(--blue); }
+  .ignore-btn { padding: 0 20px; background: var(--red); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: opacity .2s; }
+  .ignore-btn:hover { opacity: 0.9; }
+  .ignore-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .ignore-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 13px; color: var(--text-dim); }
+  .ignore-item:last-child { border-bottom: none; }
+  .ignore-remove { background: none; border: none; color: var(--text-faint); cursor: pointer; font-size: 12px; font-weight: 600; text-transform: uppercase; transition: color .2s; }
+  .ignore-remove:hover { color: var(--red); }
+  .ignore-empty { padding: 20px; text-align: center; font-size: 13px; color: var(--text-faint); }
+  .search-bar { position: relative; flex: 1; display: flex; }
+  .search-bar input { flex: 1; padding-left: 36px; }
+  .search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-size: 14px; opacity: 0.5; }
+
   .health-mini{ display:flex; flex-direction:column; gap:7px; padding:12px 10px; background:var(--panel-2); border:1px solid var(--line); border-radius:10px; margin-top:auto; }
   .health-mini-title{ font-size:10px; text-transform:uppercase; color:var(--text-faint); font-weight:700; }
   .health-row{ display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--text-dim); font-family:var(--mono); }
@@ -141,6 +163,49 @@ export default function Dashboard() {
   const termRef = useRef(null);
   const prevScanned = useRef(0);
 
+  const [ignoreList, setIgnoreList] = useState([]);
+  const [newIgnoreEmail, setNewIgnoreEmail] = useState('');
+  
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortOrder, setSortOrder] = useState('newest');
+
+  useEffect(() => {
+    fetch('/api/ignore-list')
+      .then(res => res.json())
+      .then(data => setIgnoreList(data || []))
+      .catch(() => console.log('Failed to fetch ignore list'));
+  }, []);
+
+  const handleIgnoreAction = async (action, email) => {
+    if (action === 'add' && !email) return;
+    const res = await fetch('/api/ignore-list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, email })
+    });
+    const updatedList = await res.json();
+    setIgnoreList(updatedList);
+    setNewIgnoreEmail('');
+  };
+
+  const processedIgnoreList = useMemo(() => {
+    let filtered = ignoreList.filter(email => 
+      email.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
+    if (sortOrder === 'newest') {
+      filtered = [...filtered].reverse();
+    } else if (sortOrder === 'oldest') {
+      // already oldest first from api
+    } else if (sortOrder === 'az') {
+      filtered = [...filtered].sort((a, b) => a.localeCompare(b));
+    } else if (sortOrder === 'za') {
+      filtered = [...filtered].sort((a, b) => b.localeCompare(a));
+    }
+    
+    return filtered;
+  }, [ignoreList, searchQuery, sortOrder]);
+
   useEffect(() => {
     let cancelled = false;
     async function poll() {
@@ -158,9 +223,7 @@ export default function Dashboard() {
         } else {
           setError(json.message);
         }
-      } catch (e) {
-        // fetch ব্যর্থ হলে চুপচাপ ignore — কোনো এরর মেসেজ দেখানো হবে না, পরের poll-এ আবার চেষ্টা হবে
-      }
+      } catch (e) {}
     }
     poll();
     const t = setInterval(poll, 1500);
@@ -181,6 +244,7 @@ export default function Dashboard() {
   const titles = {
     overview: ['Overview', 'Live status of the automation bot — real data'],
     console: ['Live Console', 'Real console output from index.js'],
+    ignore: ['Ignore List', 'Manage emails that the bot should ignore completely'],
   };
 
   return (
@@ -197,6 +261,10 @@ export default function Dashboard() {
           <div className="nav">
             <div className={`nav-item ${section === 'overview' ? 'active' : ''}`} onClick={() => setSection('overview')}><span>📊</span> Overview</div>
             <div className={`nav-item ${section === 'console' ? 'active' : ''}`} onClick={() => setSection('console')}><span>💻</span> Live Console</div>
+            <div className={`nav-item ${section === 'ignore' ? 'active' : ''}`} onClick={() => setSection('ignore')}>
+                <span>🚫</span> Ignore List
+                {ignoreList.length > 0 && <span className="badge">{ignoreList.length}</span>}
+            </div>
           </div>
         </div>
         <div className="health-mini">
@@ -285,6 +353,80 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
+        {section === 'ignore' && (
+          <div className="panel ignore-panel">
+            <div className="ignore-header">
+              <h2>🚫 Ignore List Management</h2>
+              <p>Add spam or promotional email addresses here. The bot will instantly ignore them without processing.</p>
+            </div>
+            
+            <div className="ignore-input-group">
+              <input 
+                  type="email" 
+                  placeholder="Type an email to block (e.g. spammer@promotions.com)" 
+                  className="ignore-input"
+                  value={newIgnoreEmail}
+                  onChange={(e) => setNewIgnoreEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleIgnoreAction('add', newIgnoreEmail)}
+              />
+              <button 
+                  onClick={() => handleIgnoreAction('add', newIgnoreEmail)}
+                  className="ignore-btn"
+              >
+                  Block Email
+              </button>
+            </div>
+
+            {ignoreList.length > 0 && (
+                <div className="ignore-input-group" style={{ marginTop: '10px' }}>
+                    <div className="search-bar">
+                        <span className="search-icon">🔍</span>
+                        <input 
+                            type="text" 
+                            placeholder="Search in blocked emails..." 
+                            className="ignore-input"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                        />
+                    </div>
+                    <select 
+                        className="ignore-select"
+                        value={sortOrder}
+                        onChange={(e) => setSortOrder(e.target.value)}
+                    >
+                        <option value="newest">Newest First</option>
+                        <option value="oldest">Oldest First</option>
+                        <option value="az">A - Z</option>
+                        <option value="za">Z - A</option>
+                    </select>
+                </div>
+            )}
+
+            <ul className="ignore-list">
+              {processedIgnoreList.map((email, idx) => (
+                  <li key={idx} className="ignore-item">
+                      <span>{email}</span>
+                      <button 
+                          onClick={() => handleIgnoreAction('remove', email)}
+                          className="ignore-remove"
+                      >
+                          Unblock
+                      </button>
+                  </li>
+              ))}
+              
+              {ignoreList.length === 0 && (
+                  <li className="ignore-empty">No emails are currently blocked.</li>
+              )}
+              
+              {ignoreList.length > 0 && processedIgnoreList.length === 0 && (
+                  <li className="ignore-empty text-red-500">No emails matched your search "{searchQuery}" ❌</li>
+              )}
+            </ul>
+          </div>
+        )}
+
       </div>
     </div>
   );

@@ -1,8 +1,8 @@
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 
-// 📊 Dashboard hook — প্রতিটা console.log/error automatically ক্যাপচার হয়ে
-// dashboard/dashboard-data.json-এ যাবে (সব dashboard-সংক্রান্ত ফাইল এই একটাই ফোল্ডারে)।
-// ⚠️ বাকি কোনো ফাইলে কোনো পরিবর্তন লাগেনি — এটা console.log নিজেই override করে।
+// 📊 Dashboard hook
 const dashboardStore = require('./dashboard/logStore');
 const _origLog = console.log;
 const _origError = console.error;
@@ -30,31 +30,43 @@ const { summarizeIssueWithAI } = require('./src/ai/gemini');
 const { generateTokenViaAPI } = require('./src/api/generateTokenAPI');
 const { createTicketViaAPI } = require('./src/api/createTicketViaAPI');
 
-
+// 🚀 Microsoft Outlook (Office 365) কনফিগারেশন
 const accountsConfig = [
     {
         name: 'Circle',
         mode: 'radius',
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
-        imapHost: 'imap.gmail.com',
-        imapPort: 993,
-        smtpHost: 'smtp.gmail.com',
-        smtpPort: 465,
-        smtpSecure: true,
+        imapHost: process.env.IMAP_HOST || 'outlook.office365.com',
+        imapPort: Number(process.env.IMAP_PORT) || 993,
+        smtpHost: process.env.SMTP_HOST || 'smtp.office365.com',
+        smtpPort: Number(process.env.SMTP_PORT) || 587, 
+        smtpSecure: false, // Outlook Port 587 এর জন্য এটি false রাখতে হয়
     },
     {
         name: 'WCL',
         mode: 'ticket',
-        user: process.env.WCL_TEST_EMAIL_USER,
+        user: process.env.WCL_TEST_EMAIL_USER, // ফাঁকা থাকলে এটি অটো স্কিপ হবে
         pass: process.env.WCL_TEST_EMAIL_PASS,
-        imapHost: 'imap.gmail.com',
-        imapPort: 993,
-        smtpHost: 'smtp.gmail.com',
-        smtpPort: 465,
-        smtpSecure: true,
+        imapHost: process.env.IMAP_HOST || 'outlook.office365.com',
+        imapPort: Number(process.env.IMAP_PORT) || 993,
+        smtpHost: process.env.SMTP_HOST || 'smtp.office365.com',
+        smtpPort: Number(process.env.SMTP_PORT) || 587,
+        smtpSecure: false, 
     },
 ];
+
+// 🚀 Ignore List ফাংশন
+function isIgnored(emailAddress) {
+    const ignoreListPath = path.join(__dirname, 'dashboard', 'ignore-list.json');
+    if (!fs.existsSync(ignoreListPath)) return false;
+    try {
+        const list = JSON.parse(fs.readFileSync(ignoreListPath, 'utf8'));
+        return list.includes(emailAddress.toLowerCase());
+    } catch (e) { 
+        return false; 
+    }
+}
 
 async function handleRadiusFlow(email, account) {
     const emailData = {
@@ -90,14 +102,13 @@ async function handleRadiusFlow(email, account) {
     }
 }
 
-
 async function handleTicketFlow(email, account) {
     const sender = email.sender || "";
     const body = email.body || "";
-    const subject = email.subject || "";
+    
+    const subject = email.subject && email.subject.trim() !== "" ? email.subject : "Automated Support Ticket";
 
     // ধাপ ১: Customer Verification
-    // ক্রম: sender email → body-র email(গুলো) → body-র company name
     let verifiedCustomer = null;
 
     if (sender) {
@@ -122,7 +133,7 @@ async function handleTicketFlow(email, account) {
     }
 
     if (!verifiedCustomer) {
-        console.log(`❌ [${account.name}] Customer could not be verified (sender/body-email/company-name all failed). Skipped.`);
+        console.log(`❌ [${account.name}] Customer could not be verified. Skipped.`);
         return;
     }
 
@@ -131,9 +142,8 @@ async function handleTicketFlow(email, account) {
     const orders = verifiedCustomer.orders || [];
 
     // ধাপ ২: Order নির্ধারণ
-    let confirmedPairs = []; // [{ software, orderId }]
+    let confirmedPairs = []; 
 
-    // (ক) Body-তে explicit "<Software> Order ID: X" প্যাটার্ন থাকলে
     const explicitPatterns = extractOrderPatterns(body);
 
     if (explicitPatterns.length > 0) {
@@ -150,7 +160,6 @@ async function handleTicketFlow(email, account) {
         }
     }
 
-    // (খ) Fallback: explicit pattern কিছুই না থাকলে বা কোনোটাই match করেনি
     if (confirmedPairs.length === 0) {
         const activeOrders = orders.filter(o => (o.status || '').toLowerCase() === 'active');
         const activeItes = activeOrders.filter(o => (o.software_name || '').toUpperCase() === 'ITES');
@@ -168,14 +177,14 @@ async function handleTicketFlow(email, account) {
         return;
     }
 
-    // ধাপ ৩: প্রতিটা কনফার্ম হওয়া পেয়ারের জন্য টিকিট তৈরি (তবে রিপ্লাই একটাই মেইলে, সব TT ID লিস্ট করে)
+    // ধাপ ৩: প্রতিটা কনফার্ম হওয়া পেয়ারের জন্য টিকিট তৈরি
     const issueSummary = await summarizeIssueWithAI(body);
     console.log(`📝 [${account.name}] AI Summary: ${issueSummary}`);
 
-    const createdTickets = []; // [{ ticketId, software, orderId }]
+    const createdTickets = []; 
 
     for (const pair of confirmedPairs) {
-        const ticketId = await createTicketViaAPI(verifiedCustomer.name, pair.orderId, pair.software, issueSummary);
+        const ticketId = await createTicketViaAPI(verifiedCustomer.name, pair.orderId, pair.software, issueSummary, subject);
 
         if (ticketId !== "Failed") {
             createdTickets.push({ ticketId, software: pair.software, orderId: pair.orderId });
@@ -202,6 +211,13 @@ async function handleTicketFlow(email, account) {
 // রাউটার
 // ==================================================================
 async function handleIncomingEmail(email, account) {
+    const senderEmail = (email.sender || "").toLowerCase();
+
+    if (isIgnored(senderEmail)) {
+        console.log(`🚫 [${account.name}] Skipped: ${senderEmail} is in the Ignore List.`);
+        return;
+    }
+
     console.log(`\n📩 [${account.name} | ${account.mode}] New Email! From: ${email.sender}`);
 
     try {
@@ -224,12 +240,13 @@ async function startBot() {
     setInterval(() => dashboardStore.heartbeat(), 5000);
 
     for (const cfg of accountsConfig) {
+        // 🚀 WCL এর ফিল্ড ফাঁকা থাকলে এটি অটো স্কিপ হয়ে যাবে 
         if (!cfg.user || !cfg.pass || !cfg.imapHost || !cfg.smtpHost) {
-            console.log(`⏭️ Skipping "${cfg.name}" — incomplete config in .env, skipped.`);
+            console.log(`⏭️ Skipping "${cfg.name}" — Email/Password empty in .env. Wait for update.`);
             continue;
         }
         const account = createMailAccount(cfg);
-        account.mode = cfg.mode; // routing-এর জন্য mode carry করা হলো
+        account.mode = cfg.mode;
         account.startEmailListener((email) => handleIncomingEmail(email, account));
     }
 }
