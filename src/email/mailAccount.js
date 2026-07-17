@@ -1,8 +1,10 @@
+// File: src/email/mailAccount.js
 const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
+const { getAccessToken } = require('../api/getOutlookToken'); // 🚀 নতুন টোকেন মেথড ইম্পোর্ট করা হলো
 
 // 🚀  ইগনোর লিস্ট 
 const ignoreKeywords = [
@@ -42,31 +44,40 @@ function createMailAccount(config) {
     const {
         name = 'Account',
         user, // বটের নিজস্ব ইমেইল এড্রেস
-        pass,
+        pass, // (OAuth-এ এটি আর কাজে লাগবে না, তবে কনফিগে থাকলে সমস্যা নেই)
         imapHost,
         imapPort = 993,
         smtpHost,
-        smtpPort = 465,
-        smtpSecure = true,
+        smtpPort = 587, // Outlook-এর জন্য 587
+        smtpSecure = false, // 587 পোর্টের জন্য false হবে
     } = config;
 
-    if (!user || !pass || !imapHost || !smtpHost) {
-        throw new Error(`❌ [${name}] Missing required mail config (user/pass/imapHost/smtpHost)`);
+    if (!user || !imapHost || !smtpHost) {
+        throw new Error(`❌ [${name}] Missing required mail config (user/imapHost/smtpHost)`);
     }
-
-    const transporter = nodemailer.createTransport({
-        host: smtpHost,
-        port: smtpPort,
-        secure: smtpSecure,
-        auth: { user, pass },
-    });
 
     let emailQueue = [];
     let isProcessingQueue = false;
     let isFetching = false;
 
+    // 🚀 মেইল সেন্ড করার ফাংশন (ডাইনামিক টোকেন দিয়ে)
     async function sendReplyEmail(toAddress, subject, bodyContent) {
         try {
+            const token = await getAccessToken(); // পাঠানোর সময় ফ্রেশ টোকেন নেওয়া হলো
+            if (!token) throw new Error("Failed to get OAuth token.");
+
+            const transporter = nodemailer.createTransport({
+                host: smtpHost,
+                port: smtpPort,
+                secure: smtpSecure,
+                requireTLS: true,
+                auth: {
+                    type: 'OAuth2',
+                    user: user,
+                    accessToken: token
+                },
+            });
+
             await transporter.sendMail({
                 from: `"Support Bot" <${user}>`,
                 to: toAddress,
@@ -79,12 +90,22 @@ function createMailAccount(config) {
         }
     }
 
+    // 🚀 মেইল রিসিভ করার ফাংশন (ডাইনামিক টোকেন দিয়ে)
     async function startEmailListener(onNewEmail) {
+        const token = await getAccessToken(); // কানেক্ট করার আগে টোকেন নেওয়া হলো
+        if (!token) {
+            console.error(`❌ [${name}] Cannot start listener, token missing.`);
+            return;
+        }
+
         const client = new ImapFlow({
             host: imapHost,
             port: imapPort,
             secure: true,
-            auth: { user, pass },
+            auth: { 
+                user: user, 
+                accessToken: token 
+            },
             logger: false,
         });
 
@@ -117,7 +138,6 @@ function createMailAccount(config) {
                 if (uids && uids.length > 0) {
                     uids = uids.slice(-5);
                     
-                    // 🚀 হার্ডকোডেড এবং ড্যাশবোর্ডের ডাইনামিক লিস্ট দুটোকে একসাথে মার্জ করা হলো
                     const dynamicIgnoreList = getDynamicIgnoreList(); 
                     const allIgnoreKeywords = [...ignoreKeywords, ...dynamicIgnoreList];
 
@@ -129,13 +149,9 @@ function createMailAccount(config) {
                             let senderAddress = parsed.from && parsed.from.value[0] ? parsed.from.value[0].address.toLowerCase() : "";
                             let subject = parsed.subject || "(No Subject)";
 
-                            // ১. ইগনোর লিস্ট চেক
                             let isIgnored = allIgnoreKeywords.some(keyword => senderAddress.includes(keyword.toLowerCase()));
-
-                            // ২. ইন্টারনাল ডোমেইন চেক
                             let isInternal = internalDomains.some(domain => senderAddress.endsWith(domain));
 
-                            // ৩. CC লজিক (বট কি 'To' তে আছে নাকি শুধু 'CC' তে?)
                             let isInTo = false;
                             if (parsed.to && parsed.to.value) {
                                 isInTo = parsed.to.value.some(r => r.address && r.address.toLowerCase() === user.toLowerCase());
@@ -146,17 +162,19 @@ function createMailAccount(config) {
                                 isInCC = parsed.cc.value.some(r => r.address && r.address.toLowerCase() === user.toLowerCase());
                             }
                             
-                            // যদি বট CC তে থাকে কিন্তু To তে না থাকে
                             let isOnlyCC = isInCC && !isInTo;
-
-                            // ৪. রিপ্লাই চেক
                             let subjTrimmed = subject.toLowerCase().trim();
                             let isReply = !!parsed.inReplyTo || !!parsed.references || subjTrimmed.startsWith('re:') || subjTrimmed.startsWith('fwd:') || subjTrimmed.startsWith('fw:');
+
+                            // 🚀 নিজের পাঠানো মেইল ইগনোর করার লজিক
+                            let isSelfSent = senderAddress === user.toLowerCase();
 
                             await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
 
                             // কন্ডিশনাল স্কিপিং
-                            if (isIgnored) {
+                            if (isSelfSent) {
+                                console.log(`⏭️ [${name}] Ignored self-sent email.`);
+                            } else if (isIgnored) {
                                 console.log(`⏭️ [${name}] Ignored promotional/blocked email from: ${senderAddress}`);
                             } else if (isInternal) {
                                 console.log(`⏭️ [${name}] Ignored internal staff email from: ${senderAddress}`);
@@ -186,7 +204,7 @@ function createMailAccount(config) {
 
         try {
             await client.connect();
-            console.log(`⚡ [${name}] Mail Server Connected! (${imapHost})`);
+            console.log(`⚡ [${name}] Mail Server Connected! (${imapHost}) via OAuth 2.0`);
 
             await client.mailboxOpen('INBOX');
             console.log(`📥 [${name}] INBOX Opened! Scanning last 30 emails for backlog...`);
@@ -198,7 +216,7 @@ function createMailAccount(config) {
             });
 
             client.on('error', (err) => {
-                console.error(`❌ [${name}] IMAP Client Error:`, err.message || err.code || err.name || String(err));
+                console.error(`❌ [${name}] IMAP Client Error:`, err.message || String(err));
             });
 
             client.on('exists', () => {
@@ -213,8 +231,7 @@ function createMailAccount(config) {
             }, 10000);
 
         } catch (error) {
-            const detail = error.message || error.code || error.name || error.response || String(error);
-            console.error(`❌ [${name}] IMAP Connection Error:`, detail);
+            console.error(`❌ [${name}] IMAP Connection Error:`, error.message);
             isFetching = false;
             setTimeout(() => startEmailListener(onNewEmail), 10000);
         }
