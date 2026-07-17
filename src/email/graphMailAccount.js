@@ -5,17 +5,20 @@ function createGraphMailAccount(config) {
     const { user, name, mode } = config;
 
     async function fetchUnreadEmails(callback) {
-        const token = await getAccessToken(config); // 🔥 নির্দিষ্ট অ্যাকাউন্টের কনফিগ পাঠানো হচ্ছে
+        const token = await getAccessToken(config);
         if (!token) return;
 
         try {
+            // 🔥 মাইক্রোসফটের সার্ভার গ্লিচ এড়াতে $filter ছাড়াই টপ ১০টি মেইল আনছি
             const response = await axios.get(
-                `https://graph.microsoft.com/v1.0/users/${user}/mailFolders/inbox/messages?$filter=isRead eq false&$top=10`,
+                `https://graph.microsoft.com/v1.0/users/${user}/mailFolders/inbox/messages?$top=10`,
                 { headers: { Authorization: `Bearer ${token}` } }
             );
 
-            const messages = response.data.value;
-            for (const msg of messages) {
+            // 🔥 সার্ভারের বদলে আমরা নিজেরা কোড দিয়ে আনরিড (Unread) মেইলগুলো ফিল্টার করছি
+            const unreadMessages = response.data.value.filter(msg => msg.isRead === false);
+
+            for (const msg of unreadMessages) {
                 const emailData = {
                     id: msg.id,
                     sender: msg.sender?.emailAddress?.address,
@@ -28,7 +31,8 @@ function createGraphMailAccount(config) {
                 await callback(emailData);
             }
         } catch (error) {
-            console.error(`❌ [${name}] Graph API Fetch Error:`, error.response?.data?.error?.message || error.message);
+            const errorDetails = error.response?.data?.error?.message || error.message || "Network/Server issue";
+            console.error(`❌ [${name}] Graph API Fetch Error:`, errorDetails);
         }
     }
 
@@ -45,7 +49,7 @@ function createGraphMailAccount(config) {
     }
 
     async function sendReplyEmail(to, subject, htmlBody) {
-        const token = await getAccessToken(config); // 🔥 টোকেন ফেচ
+        const token = await getAccessToken(config);
         if (!token) return;
 
         try {
@@ -71,10 +75,11 @@ function createGraphMailAccount(config) {
         console.log(`📡 [${name}] Starting Graph API Polling for ${user}...`);
         setInterval(() => {
             fetchUnreadEmails(callback);
-        }, 15000); 
+        }, 30000); 
     }
 
     return {
+        name,
         startEmailListener,
         sendReplyEmail,
         mode
